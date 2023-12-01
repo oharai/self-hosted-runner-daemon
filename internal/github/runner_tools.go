@@ -10,7 +10,7 @@ import (
 )
 
 func DownloadRunnerTools(version, runnerOS, arch, workDir string) error {
-	// ランナーパッケージをダウンロードする
+	// Download runner package
 	fileName := fmt.Sprintf("actions-runner-%s-%s-%s.tar.gz", runnerOS, arch, version)
 	url := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/%s", version, fileName)
 	pathToDownload := path.Join(workDir, fileName)
@@ -18,7 +18,7 @@ func DownloadRunnerTools(version, runnerOS, arch, workDir string) error {
 		return fmt.Errorf("failed to download file: %w", err)
 	}
 
-	// アーカイブを解凍する
+	// Extract archive
 	cmd := exec.Command("tar", "xzf", pathToDownload)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -28,15 +28,24 @@ func DownloadRunnerTools(version, runnerOS, arch, workDir string) error {
 	return nil
 }
 
-func StartRunner(workDir, repo, registrationToken string) error {
-	cmd := exec.Command(workDir+"/config.sh", "--ephemeral", "--url", "https://github.com/"+repo, "--token", registrationToken)
+func StartRunner(workDir, repo, labels, registrationToken string) error {
+	cmd := exec.Command(
+		workDir+"/config.sh",
+		"--url", "https://github.com/"+repo,
+		"--token", registrationToken,
+		"--labels", labels,
+		"--disableupdate",
+		"--replace",
+		"--unattended",
+		"--ephemeral",
+	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to setup runner: %w", err)
 	}
 
-	// ランナーを実行する
+	// Start runner
 	cmd = exec.Command(workDir + "/run.sh")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -45,4 +54,10 @@ func StartRunner(workDir, repo, registrationToken string) error {
 	}
 
 	return nil
+}
+
+func IsRunnerRunning(workDir string) bool {
+	// workDir/.runner exists if runner is running
+	_, err := os.Stat(workDir + "/.runner")
+	return err == nil
 }

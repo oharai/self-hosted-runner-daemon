@@ -20,7 +20,7 @@ func NewCommand() *Command {
 }
 
 func (c *Command) Execute(args []string) error {
-	if len(args) < 6 {
+	if len(args) < 7 {
 		return fmt.Errorf("invalid arguments")
 	}
 
@@ -30,13 +30,14 @@ func (c *Command) Execute(args []string) error {
 	workDir := args[3]
 	repo := args[4]
 	githubToken := args[5]
+	labels := args[6]
 
 	if err := c.init(version, runnerOS, arch, workDir); err != nil {
 		return fmt.Errorf("failed to initialize: %w", err)
 	}
 
 	log.Printf("starting runnerd on port 8080")
-	http.HandleFunc("/run", c.runHandler(workDir, repo, githubToken))
+	http.HandleFunc("/run", c.runHandler(workDir, repo, labels, githubToken))
 
 	srv := &http.Server{Addr: ":8080"}
 
@@ -77,8 +78,14 @@ func (c *Command) init(version string, runnerOS string, arch string, workDir str
 	return github.DownloadRunnerTools(version, runnerOS, arch, workDir)
 }
 
-func (c *Command) runHandler(workDir, repo, githubToken string) func(w http.ResponseWriter, r *http.Request) {
+func (c *Command) runHandler(workDir, repo, labels, githubToken string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if github.IsRunnerRunning(workDir) {
+			log.Printf("runner is already running")
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+
 		token, err := github.GetGitHubRunnerRegistrationToken(repo, githubToken)
 		if err != nil {
 			log.Printf("failed to get registration token: %v", err)
@@ -86,8 +93,7 @@ func (c *Command) runHandler(workDir, repo, githubToken string) func(w http.Resp
 			return
 		}
 
-		// ランナーの設定を開始する
-		if err := github.StartRunner(workDir, repo, token); err != nil {
+		if err := github.StartRunner(workDir, repo, labels, token); err != nil {
 			log.Printf("failed to start runner: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
