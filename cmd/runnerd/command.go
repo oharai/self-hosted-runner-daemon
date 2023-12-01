@@ -7,11 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 
 	"github.com/oharai/self-hosted-runner-daemon/internal/github"
-	"github.com/oharai/self-hosted-runner-daemon/util"
 )
 
 type Command struct {
@@ -38,7 +36,7 @@ func (c *Command) Execute(args []string) error {
 	}
 
 	log.Printf("starting runnerd on port 8080")
-	http.HandleFunc("/setup", c.setupHandler(workDir, repo, githubToken))
+	http.HandleFunc("/run", c.runHandler(workDir, repo, githubToken))
 
 	srv := &http.Server{Addr: ":8080"}
 
@@ -63,42 +61,23 @@ func (c *Command) Execute(args []string) error {
 	return nil
 }
 
-func (c *Command) init(
-	version string,
-	runnerOS string,
-	arch string,
-	workDir string,
-) error {
-	// ディレクトリを作成し、その中に移動する
-	err := os.Mkdir(workDir, os.ModePerm)
-	if err != nil {
+func (c *Command) init(version string, runnerOS string, arch string, workDir string) error {
+	if _, err := os.Stat(workDir); err == nil {
+		if err := os.RemoveAll(workDir); err != nil {
+			return fmt.Errorf("failed to remove directory: %w", err)
+		}
+	}
+	if err := os.Mkdir(workDir, os.ModePerm); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
-	err = os.Chdir(workDir)
-	if err != nil {
+	if err := os.Chdir(workDir); err != nil {
 		return fmt.Errorf("failed to change directory: %w", err)
 	}
 
-	// ランナーパッケージをダウンロードする
-	fileName := fmt.Sprintf("actions-runner-%s-%s-%s.tar.gz", runnerOS, arch, version)
-	url := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/%s", version, fileName)
-	log.Printf("downloading %s", url)
-	err = util.DownloadFile(fileName, url)
-	if err != nil {
-		return fmt.Errorf("failed to download file: %w", err)
-	}
-
-	// アーカイブを解凍する
-	cmd := exec.Command("tar", "xzf", fileName)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to extract archive: %w", err)
-	}
-	return nil
+	return github.DownloadRunnerTools(version, runnerOS, arch, workDir)
 }
 
-func (c *Command) setupHandler(workDir, repo, githubToken string) func(w http.ResponseWriter, r *http.Request) {
+func (c *Command) runHandler(workDir, repo, githubToken string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, err := github.GetGitHubRunnerRegistrationToken(repo, githubToken)
 		if err != nil {
@@ -108,21 +87,8 @@ func (c *Command) setupHandler(workDir, repo, githubToken string) func(w http.Re
 		}
 
 		// ランナーの設定を開始する
-		cmd := exec.Command(workDir+"/config.sh", "--ephemeral", "--url", "https://github.com/"+repo, "--token", token)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			log.Printf("failed to setup runner: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		// ランナーを実行する
-		cmd = exec.Command(workDir + "/run.sh")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			log.Printf("failed to run runner: %v", err)
+		if err := github.StartRunner(workDir, repo, token); err != nil {
+			log.Printf("failed to start runner: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
